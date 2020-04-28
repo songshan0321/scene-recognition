@@ -7,9 +7,12 @@ import argparse
 import os
 import shutil
 import time
+import numpy as np
+import matplotlib.pyplot as plt
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import torch.nn.parallel
 import torch.backends.cudnn as cudnn
 import torch.optim
@@ -17,6 +20,8 @@ import torch.utils.data
 import torchvision.transforms as transforms
 import torchvision.datasets as datasets
 import torchvision.models as models
+
+from torch.utils.tensorboard import SummaryWriter
 
 import wideresnet
 import pdb
@@ -63,7 +68,12 @@ best_prec1 = 0
 def main():
     global args, best_prec1
     args = parser.parse_args()
-    print args
+    print(args)
+
+    # Writer for Tensorboard
+    global writer
+    writer = SummaryWriter('trainval/places3')
+
     # create model
     print("=> creating model '{}'".format(args.arch))
     if args.arch.lower().startswith('wideresnet'):
@@ -77,7 +87,7 @@ def main():
         model.cuda()
     else:
         model = torch.nn.DataParallel(model).cuda()
-    print model
+    # print(model)
     # optionally resume from a checkpoint
     if args.resume:
         if os.path.isfile(args.resume):
@@ -91,6 +101,14 @@ def main():
         else:
             print("=> no checkpoint found at '{}'".format(args.resume))
 
+    # Drop the last layer and add in a new last fully connected layer
+    set_parameter_requires_grad(model, feature_extracting=True)
+    classifier = list(model.classifier.children())
+    model.classifier = nn.Sequential(*classifier[:-1])
+    model.classifier.add_module('6', nn.Linear(classifier[-1].in_features, 3))
+    model.cuda()
+    print(model)
+    
     cudnn.benchmark = True
 
     # Data loading code
@@ -99,45 +117,56 @@ def main():
     normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
                                      std=[0.229, 0.224, 0.225])
 
+    train_data = datasets.ImageFolder(traindir, transforms.Compose([
+                    transforms.Resize(256),
+                    transforms.RandomResizedCrop(224),
+                    transforms.RandomHorizontalFlip(),
+                    transforms.ToTensor(),
+                    normalize,
+                ]))
+    val_data = datasets.ImageFolder(valdir, transforms.Compose([
+                    transforms.Resize(256),
+                    transforms.CenterCrop(224),
+                    transforms.ToTensor(),
+                    normalize,
+                ]))
+    
+    print(train_data.class_to_idx)
+
+    global classes
+    classes = {v: k for k, v in train_data.class_to_idx.items()}
+    print(classes)
+
     train_loader = torch.utils.data.DataLoader(
-        datasets.ImageFolder(traindir, transforms.Compose([
-            transforms.RandomSizedCrop(224),
-            transforms.RandomHorizontalFlip(),
-            transforms.ToTensor(),
-            normalize,
-        ])),
+        train_data,
         batch_size=args.batch_size, shuffle=True,
         num_workers=args.workers, pin_memory=True)
 
     val_loader = torch.utils.data.DataLoader(
-        datasets.ImageFolder(valdir, transforms.Compose([
-            transforms.Scale(256),
-            transforms.CenterCrop(224),
-            transforms.ToTensor(),
-            normalize,
-        ])),
-        batch_size=args.batch_size, shuffle=False,
+        val_data,
+        batch_size=args.batch_size, shuffle=True,
         num_workers=args.workers, pin_memory=True)
 
-    # define loss function (criterion) and pptimizer
+    # define loss function (criterion) and optimizer
     criterion = nn.CrossEntropyLoss().cuda()
 
-    optimizer = torch.optim.SGD(model.parameters(), args.lr,
-                                momentum=args.momentum,
-                                weight_decay=args.weight_decay)
+    # optimizer = torch.optim.SGD(model.parameters(), args.lr,
+    #                             momentum=args.momentum,
+    #                             weight_decay=args.weight_decay)
+    optimizer = torch.optim.Adam(model.parameters(), args.lr)
 
     if args.evaluate:
         validate(val_loader, model, criterion)
         return
 
-    for epoch in range(args.start_epoch, args.epochs):
+    for epoch in range(args.epochs):
         adjust_learning_rate(optimizer, epoch)
 
         # train for one epoch
         train(train_loader, model, criterion, optimizer, epoch)
 
         # evaluate on validation set
-        prec1 = validate(val_loader, model, criterion)
+        prec1 = validate(val_loader, model, criterion, epoch)
 
         # remember best prec@1 and save checkpoint
         is_best = prec1 > best_prec1
@@ -155,7 +184,6 @@ def train(train_loader, model, criterion, optimizer, epoch):
     data_time = AverageMeter()
     losses = AverageMeter()
     top1 = AverageMeter()
-    top5 = AverageMeter()
 
     # switch to train mode
     model.train()
@@ -173,10 +201,9 @@ def train(train_loader, model, criterion, optimizer, epoch):
         loss = criterion(output, target_var)
 
         # measure accuracy and record loss
-        prec1, prec5 = accuracy(output.data, target, topk=(1, 5))
-        losses.update(loss.data[0], input.size(0))
+        prec1 = accuracy(output.data, target, topk=(1))
+        losses.update(loss.data, input.size(0))
         top1.update(prec1[0], input.size(0))
-        top5.update(prec5[0], input.size(0))
 
         # compute gradient and do SGD step
         optimizer.zero_grad()
@@ -192,61 +219,108 @@ def train(train_loader, model, criterion, optimizer, epoch):
                   'Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t'
                   'Data {data_time.val:.3f} ({data_time.avg:.3f})\t'
                   'Loss {loss.val:.4f} ({loss.avg:.4f})\t'
-                  'Prec@1 {top1.val:.3f} ({top1.avg:.3f})\t'
-                  'Prec@5 {top5.val:.3f} ({top5.avg:.3f})'.format(
+                  'Prec@1 {top1.val:.3f} ({top1.avg:.3f})\t'.format(
                    epoch, i, len(train_loader), batch_time=batch_time,
-                   data_time=data_time, loss=losses, top1=top1, top5=top5))
+                   data_time=data_time, loss=losses, top1=top1))
 
 
-def validate(val_loader, model, criterion):
+def plot_classes_preds(net, images, labels):
+    '''
+    Generates matplotlib Figure using a trained network, along with images
+    and labels from a batch, that shows the network's top prediction along
+    with its probability, alongside the actual label, coloring this
+    information based on whether the prediction was correct or not.
+    Uses the "images_to_probs" function.
+    '''
+    preds, probs = images_to_probs(net, images)
+    # plot the images in the batch, along with predicted and true labels
+    fig = plt.figure(figsize=(10, 10))
+    for idx in np.arange(9):
+        ax = fig.add_subplot(3, 3, idx+1, xticks=[], yticks=[])
+        matplotlib_imshow(images[idx], one_channel=True)
+        ax.set_title("{0}, {1:.1f}%\n(label: {2})".format(
+            classes[preds[idx]],
+            probs[idx] * 100.0,
+            classes[labels[idx].item()]),
+                    color=("green" if preds[idx]==labels[idx].item() else "red"))
+    return fig
+
+def validate(val_loader, model, criterion, epoch):
     batch_time = AverageMeter()
     losses = AverageMeter()
     top1 = AverageMeter()
-    top5 = AverageMeter()
 
     # switch to evaluate mode
     model.eval()
 
     end = time.time()
-    for i, (input, target) in enumerate(val_loader):
-        target = target.cuda(async=True)
-        input_var = torch.autograd.Variable(input, volatile=True)
-        target_var = torch.autograd.Variable(target, volatile=True)
 
-        # compute output
-        output = model(input_var)
-        loss = criterion(output, target_var)
+    with torch.no_grad():
+        for i, (input, target) in enumerate(val_loader):
+            target = target.cuda(async=True)
+            input_var = torch.autograd.Variable(input)
+            target_var = torch.autograd.Variable(target)
 
-        # measure accuracy and record loss
-        prec1, prec5 = accuracy(output.data, target, topk=(1, 5))
-        losses.update(loss.data[0], input.size(0))
-        top1.update(prec1[0], input.size(0))
-        top5.update(prec5[0], input.size(0))
+            # compute output
+            output = model(input_var)
+            loss = criterion(output, target_var)
 
-        # measure elapsed time
-        batch_time.update(time.time() - end)
-        end = time.time()
+            # measure accuracy and record loss
+            prec1 = accuracy(output.data, target, topk=(1))
+            losses.update(loss.data, input.size(0))
+            top1.update(prec1[0], input.size(0))
 
-        if i % args.print_freq == 0:
-            print('Test: [{0}/{1}]\t'
-                  'Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t'
-                  'Loss {loss.val:.4f} ({loss.avg:.4f})\t'
-                  'Prec@1 {top1.val:.3f} ({top1.avg:.3f})\t'
-                  'Prec@5 {top5.val:.3f} ({top5.avg:.3f})'.format(
-                   i, len(val_loader), batch_time=batch_time, loss=losses,
-                   top1=top1, top5=top5))
+            # measure elapsed time
+            batch_time.update(time.time() - end)
+            end = time.time()
 
-    print(' * Prec@1 {top1.avg:.3f} Prec@5 {top5.avg:.3f}'
-          .format(top1=top1, top5=top5))
+            if i % args.print_freq == 0:
+                print('Test: [{0}/{1}]\t'
+                    'Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t'
+                    'Loss {loss.val:.4f} ({loss.avg:.4f})\t'
+                    'Prec@1 {top1.val:.3f} ({top1.avg:.3f})\t'.format(
+                    i, len(val_loader), batch_time=batch_time, loss=losses,
+                    top1=top1))
+
+            writer.add_figure('predictions vs. actuals',
+                        plot_classes_preds(model, input_var, target),
+                        global_step=epoch)
+
+    print(' * Prec@1 {top1.avg:.3f}'
+          .format(top1=top1))
 
     return top1.avg
 
+def images_to_probs(net, images):
+    '''
+    Generates predictions and corresponding probabilities from a trained
+    network and a list of images
+    '''
+    output = net(images)
+    # convert output probabilities to predicted class
+    _, preds_tensor = torch.max(output, 1)
+    preds = np.squeeze(preds_tensor.cpu().numpy())
+    return preds, [F.softmax(el, dim=0)[i].item() for i, el in zip(preds, output)]
+
+def matplotlib_imshow(img, one_channel=False):
+    if one_channel:
+        img = img.mean(dim=0)
+    img = img / 2 + 0.5     # unnormalize
+    npimg = img.numpy()
+    if one_channel:
+        plt.imshow(npimg, cmap="Greys")
+    else:
+        plt.imshow(np.transpose(npimg, (1, 2, 0)))
 
 def save_checkpoint(state, is_best, filename='checkpoint.pth.tar'):
     torch.save(state, filename + '_latest.pth.tar')
     if is_best:
         shutil.copyfile(filename + '_latest.pth.tar', filename + '_best.pth.tar')
 
+def set_parameter_requires_grad(model, feature_extracting):
+    if feature_extracting:
+        for param in model.parameters():
+            param.requires_grad = False
 
 class AverageMeter(object):
     """Computes and stores the average and current value"""
@@ -275,17 +349,17 @@ def adjust_learning_rate(optimizer, epoch):
 
 def accuracy(output, target, topk=(1,)):
     """Computes the precision@k for the specified values of k"""
-    maxk = max(topk)
+    # maxk = max(topk)
     batch_size = target.size(0)
 
-    _, pred = output.topk(maxk, 1, True, True)
+    _, pred = output.topk(1, 1, True, True)
     pred = pred.t()
     correct = pred.eq(target.view(1, -1).expand_as(pred))
 
     res = []
-    for k in topk:
-        correct_k = correct[:k].view(-1).float().sum(0)
-        res.append(correct_k.mul_(100.0 / batch_size))
+    # for k in topk:
+    correct_k = correct[:1].view(-1).float().sum(0)
+    res.append(correct_k.mul_(100.0 / batch_size))
     return res
 
 

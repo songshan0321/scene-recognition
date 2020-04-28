@@ -5,7 +5,7 @@ from torchvision import transforms as trn
 from torch.nn import functional as F
 
 
-archs = ['resnet50','densenet161','alexnet']
+archs = ['alexnet']
 for arch in archs:
     model_file = 'whole_%s_places365.pth.tar' % arch
     save_file = 'whole_%s_places365_python36.pth.tar' % arch

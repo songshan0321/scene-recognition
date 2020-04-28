@@ -1,0 +1,4 @@
+/e/escalator/indoor 0
+/o/other 1
+/s/staircase 2
+
