@@ -7,6 +7,7 @@ import argparse
 import os
 import shutil
 import time
+import datetime
 import numpy as np
 import matplotlib.pyplot as plt
 
@@ -23,7 +24,6 @@ import torchvision.models as models
 
 from torch.utils.tensorboard import SummaryWriter
 
-import wideresnet
 import pdb
 model_names = sorted(name for name in models.__dict__
     if name.islower() and not name.startswith("__")
@@ -72,15 +72,16 @@ def main():
 
     # Writer for Tensorboard
     global writer
-    writer = SummaryWriter('trainval/places3')
+    time_string = datetime.datetime.now().strftime("%Y%m%d-%H%M%S")
+    log_dir = "logs/trainval/" + time_string
+    writer = SummaryWriter(log_dir)
+
+    # Create checkpoint folder
+    os.mkdir(os.path.join('checkpoint', time_string))
 
     # create model
     print("=> creating model '{}'".format(args.arch))
-    if args.arch.lower().startswith('wideresnet'):
-        # a customized resnet model with last feature map size as 14x14 for better class activation mapping
-        model  = wideresnet.resnet50(num_classes=args.num_classes)
-    else:
-        model = models.__dict__[args.arch](num_classes=args.num_classes)
+    model = models.__dict__[args.arch](num_classes=args.num_classes)
 
     if args.arch.lower().startswith('alexnet') or args.arch.lower().startswith('vgg'):
         model.features = torch.nn.DataParallel(model.features)
@@ -150,12 +151,13 @@ def main():
     # define loss function (criterion) and optimizer
     criterion = nn.CrossEntropyLoss().cuda()
 
-    # optimizer = torch.optim.SGD(model.parameters(), args.lr,
-    #                             momentum=args.momentum,
-    #                             weight_decay=args.weight_decay)
-    optimizer = torch.optim.Adam(model.parameters(), args.lr)
+    optimizer = torch.optim.SGD(model.parameters(), args.lr,
+                                momentum=args.momentum,
+                                weight_decay=args.weight_decay)
+    # optimizer = torch.optim.Adam(model.parameters(), args.lr)
 
     if args.evaluate:
+        print("Validation:\t")
         validate(val_loader, model, criterion)
         return
 
@@ -165,19 +167,22 @@ def main():
         # train for one epoch
         train(train_loader, model, criterion, optimizer, epoch)
 
-        # evaluate on validation set
+        # evaluate on train and validation set
         prec1 = validate(val_loader, model, criterion, epoch)
 
         # remember best prec@1 and save checkpoint
         is_best = prec1 > best_prec1
         best_prec1 = max(prec1, best_prec1)
+        if is_best:
+            print("Saving best checkpoint with precision of: {0}".format(best_prec1))
         save_checkpoint({
             'epoch': epoch + 1,
             'arch': args.arch,
             'state_dict': model.state_dict(),
             'best_prec1': best_prec1,
-        }, is_best, args.arch.lower())
+        }, is_best, os.path.join('checkpoint', time_string, args.arch.lower()))
 
+    print("{0}: Best Val Prec@1 {1:.3f}".format(time_string, best_prec1))
 
 def train(train_loader, model, criterion, optimizer, epoch):
     batch_time = AverageMeter()
@@ -215,13 +220,18 @@ def train(train_loader, model, criterion, optimizer, epoch):
         end = time.time()
 
         if i % args.print_freq == 0:
-            print('Epoch: [{0}][{1}/{2}]\t'
+            print('Train: [{0}][{1}/{2}]\t'
                   'Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t'
                   'Data {data_time.val:.3f} ({data_time.avg:.3f})\t'
                   'Loss {loss.val:.4f} ({loss.avg:.4f})\t'
                   'Prec@1 {top1.val:.3f} ({top1.avg:.3f})\t'.format(
                    epoch, i, len(train_loader), batch_time=batch_time,
                    data_time=data_time, loss=losses, top1=top1))
+    
+    writer.add_scalars('loss', {'train loss': losses.avg}, epoch)
+    print('Train: \tLoss {loss.avg:.4f}\t'
+          'Prec@1 {top1.avg:.3f}\t'
+          .format(loss=losses, top1=top1))
 
 
 def plot_classes_preds(net, images, labels):
@@ -245,7 +255,7 @@ def plot_classes_preds(net, images, labels):
                     color=("green" if preds[idx]==labels[idx].item() else "red"))
     return fig
 
-def validate(val_loader, model, criterion, epoch):
+def validate(loader, model, criterion, epoch):
     batch_time = AverageMeter()
     losses = AverageMeter()
     top1 = AverageMeter()
@@ -256,7 +266,7 @@ def validate(val_loader, model, criterion, epoch):
     end = time.time()
 
     with torch.no_grad():
-        for i, (input, target) in enumerate(val_loader):
+        for i, (input, target) in enumerate(loader):
             target = target.cuda(async=True)
             input_var = torch.autograd.Variable(input)
             target_var = torch.autograd.Variable(target)
@@ -274,20 +284,25 @@ def validate(val_loader, model, criterion, epoch):
             batch_time.update(time.time() - end)
             end = time.time()
 
-            if i % args.print_freq == 0:
-                print('Test: [{0}/{1}]\t'
-                    'Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t'
-                    'Loss {loss.val:.4f} ({loss.avg:.4f})\t'
-                    'Prec@1 {top1.val:.3f} ({top1.avg:.3f})\t'.format(
-                    i, len(val_loader), batch_time=batch_time, loss=losses,
-                    top1=top1))
+            # if i % args.print_freq == 0:
+            #     print('Test: [{0}/{1}]\t'
+            #         'Time {batch_time.val:.3f} ({batch_time.avg:.3f})\t'
+            #         'Loss {loss.val:.4f} ({loss.avg:.4f})\t'
+            #         'Prec@1 {top1.val:.3f} ({top1.avg:.3f})\t'.format(
+            #         i, len(loader), batch_time=batch_time, loss=losses,
+            #         top1=top1))
+            
+            # if i % args.print_freq == 0:
 
-            writer.add_figure('predictions vs. actuals',
-                        plot_classes_preds(model, input_var, target),
-                        global_step=epoch)
+    writer.add_figure('predictions vs. actuals',
+                plot_classes_preds(model, input_var, target),
+                global_step=epoch)
 
-    print(' * Prec@1 {top1.avg:.3f}'
-          .format(top1=top1))
+    writer.add_scalars('loss', {'val loss': losses.avg}, epoch)
+
+    print('Valid: \tLoss {loss.avg:.4f}\t'
+          'Prec@1 {top1.avg:.3f}\t'
+          .format(loss=losses, top1=top1))
 
     return top1.avg
 
