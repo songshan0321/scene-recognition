@@ -2,3 +2,4 @@
 .vscode
 model/*
 checkpoint/*
+logs/*
