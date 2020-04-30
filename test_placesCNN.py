@@ -177,6 +177,9 @@ def accuracy(output, target, topk=(1,)):
 
     _, pred = output.topk(1, 1, True, True)
     pred = pred.t()
+    ## Code to test the merging of escalator and staircase 
+    # pred[pred==2] = 0
+    # target[target==2] = 0
     correct = pred.eq(target.view(1, -1).expand_as(pred))
 
     res = []
@@ -184,7 +187,6 @@ def accuracy(output, target, topk=(1,)):
     correct_k = correct[:1].view(-1).float().sum(0)
     res.append(correct_k.mul_(100.0 / batch_size))
     return res
-
 
 
 

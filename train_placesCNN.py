@@ -51,7 +51,7 @@ parser.add_argument('--momentum', default=0.9, type=float, metavar='M',
                     help='momentum')
 parser.add_argument('--weight-decay', '--wd', default=1e-4, type=float,
                     metavar='W', help='weight decay (default: 1e-4)')
-parser.add_argument('--print-freq', '-p', default=10, type=int,
+parser.add_argument('--print-freq', '-p', default=40, type=int,
                     metavar='N', help='print frequency (default: 10)')
 parser.add_argument('--resume', default='', type=str, metavar='PATH',
                     help='path to latest checkpoint (default: none)')
@@ -151,18 +151,20 @@ def main():
     # define loss function (criterion) and optimizer
     criterion = nn.CrossEntropyLoss().cuda()
 
-    optimizer = torch.optim.SGD(model.parameters(), args.lr,
-                                momentum=args.momentum,
-                                weight_decay=args.weight_decay)
-    # optimizer = torch.optim.Adam(model.parameters(), args.lr)
+    # optimizer = torch.optim.SGD(model.parameters(), args.lr,
+    #                             momentum=args.momentum,
+    #                             weight_decay=args.weight_decay)
+    optimizer = torch.optim.Adam(model.parameters(), args.lr)
 
     if args.evaluate:
         print("Validation:\t")
         validate(val_loader, model, criterion)
         return
 
+    best_epoch = 0
+
     for epoch in range(args.epochs):
-        adjust_learning_rate(optimizer, epoch)
+        # adjust_learning_rate(optimizer, epoch)
 
         # train for one epoch
         train(train_loader, model, criterion, optimizer, epoch)
@@ -174,6 +176,7 @@ def main():
         is_best = prec1 > best_prec1
         best_prec1 = max(prec1, best_prec1)
         if is_best:
+            best_epoch = epoch
             print("Saving best checkpoint with precision of: {0}".format(best_prec1))
         save_checkpoint({
             'epoch': epoch + 1,
@@ -182,7 +185,7 @@ def main():
             'best_prec1': best_prec1,
         }, is_best, os.path.join('checkpoint', time_string, args.arch.lower()))
 
-    print("{0}: Best Val Prec@1 {1:.3f}".format(time_string, best_prec1))
+    print("{0}: Best Val Prec@1 {1:.3f} at epoch {2}".format(time_string, best_prec1, best_epoch))
 
 def train(train_loader, model, criterion, optimizer, epoch):
     batch_time = AverageMeter()
@@ -356,8 +359,8 @@ class AverageMeter(object):
 
 
 def adjust_learning_rate(optimizer, epoch):
-    """Sets the learning rate to the initial LR decayed by 10 every 30 epochs"""
-    lr = args.lr * (0.1 ** (epoch // 30))
+    """Sets the learning rate to the initial LR decayed by 10 every 10 epochs"""
+    lr = args.lr * (0.1 ** (epoch // 10))
     for param_group in optimizer.param_groups:
         param_group['lr'] = lr
 
