@@ -9,6 +9,9 @@ annotation_dict = {}
 labels = []
 data = []
 
+new_width=256
+new_height=256
+
 for dirname, dirnames, filenames in os.walk('./classes'):
 	for filename in filenames:
 		if filename.endswith('.png'):
@@ -16,8 +19,18 @@ for dirname, dirnames, filenames in os.walk('./classes'):
 			################
 			#grab the image#
 			################
+			im = Image.open(os.path.join(dirname, filename))
+			width, height = im.size   # Get dimensions
 
-			im = np.asarray(Image.open(os.path.join(dirname, filename))).transpose(2,0,1)
+			left = (width - new_width)/2
+			top = (height - new_height)/2
+			right = (width + new_width)/2
+			bottom = (height + new_height)/2
+
+			# Crop the center of the image
+			im = im.crop((left, top, right, bottom))
+
+			im = np.asarray(im).transpose(2,0,1)
 			# pix = im.load()
 			#print(os.path.join(dirname, filename))
 

@@ -22,7 +22,6 @@
        -- *.png
    ```
 
-   
 
 ## 2. Train model
 
@@ -52,7 +51,7 @@
    source /opt/intel/openvino/bin/setupvars.sh
    sudo python3 /opt/intel/openvino/deployment_tools/model_optimizer/mo.py --input_model /home/shan/github/scene-recognition/model/alexnet.onnx --mean_values [123.675,116.28,103.53] --scale_values [58.395,57.12,57.375] --reverse_input_channels
    ```
-```
+
 
 ## 4. Test performance
 
@@ -62,11 +61,10 @@
    git clone https://github.com/songshan0321/open_model_zoo.git
    cd open_model_zoo
    git checkout lb-scene
-```
-
+   ```
 2. Setup environment 
 
-   ```bash
+   ```
    cd tools/accuracy_checker
    python3 -m virtualenv -p python3.7 ./venv
    source venv/bin/activate
@@ -77,17 +75,20 @@
 
    ```bash
    cd scene-recognition/PNG-2-CIFAR10
+   ./resize-script.sh
    python convert-images-to-cifar-format.py
    ```
 
 4. Run the checker and check the result
 
    ```bash
-   accuracy_check -c lb-scene/config.yml -m /path/to/IRmodel -s /path/to/source/data
+   cd open_model_zoo/tools/accuracy_checker
+   source venv/bin/activate
+accuracy_check -c lb_scene/config.yml -m /path/to/IRmodel -s /path/to/source/data
    ```
 
    Output:
-
+   
    ```bash
    Processing info:
    model: Alexnet
