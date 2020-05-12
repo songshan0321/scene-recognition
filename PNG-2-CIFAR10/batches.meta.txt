@@ -1,0 +1,4 @@
+escalator
+other
+staircase
+

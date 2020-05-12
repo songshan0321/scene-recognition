@@ -3,3 +3,7 @@
 model/*
 checkpoint/*
 logs/*
+PNG-2-CIFAR10/classes
+venv
+test_image/*
+PNG-2-CIFAR10/val
