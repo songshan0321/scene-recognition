@@ -13,16 +13,19 @@ centre_crop = trn.Compose([
 
 # dummy_input = torch.randn(10, 3, 224, 224, device='cuda')
 # model = torchvision.models.alexnet(pretrained=True).cuda()
-img = Image.open('test_image/0.jpg')
+img = Image.open('test_image/00419.jpg')
 input_img = V(centre_crop(img).unsqueeze(0))
 
-model_file = 'alexnet_places365.pth.tar'
-model = torchvision.models.__dict__['alexnet'](num_classes=365)
+model_file = 'checkpoint/20200506-174923/alexnet_best.pth.tar'
+model = torchvision.models.__dict__['alexnet'](num_classes=3)
 checkpoint = torch.load(model_file, map_location=lambda storage, loc: storage)
 state_dict = {str.replace(k,'module.',''): v for k,v in checkpoint['state_dict'].items()}
+print(model)
 model.load_state_dict(state_dict)
+# print(model)
 
 input_names = [ "actual_input_1" ] + [ "learned_%d" % i for i in range(16) ]
 output_names = [ "output1" ]
 
-torch.onnx.export(model, input_img, "alexnet.onnx", verbose=True, input_names=input_names, output_names=output_names)
+torch.onnx.export(model, input_img, "./model/alexnet.onnx", verbose=True, input_names=input_names, output_names=output_names)
+print("Convert successfully")
